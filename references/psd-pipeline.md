@@ -24,6 +24,7 @@
 | `scripts/scene_to_svg.py` | Чистое преобразование сцены в SVG, карту имён и post-script Photopea |
 | `scripts/prepare_capture.py` | Добавление кнопки экспорта сцены в отдельную копию собственного HTML для разрешённого браузера |
 | `scripts/build_pea.py` | Полный HTML → PSD/PNG конвейер в окружении с разрешённым самостоятельным Playwright |
+| `scripts/build_batch.py` | Реестр листов, общая сессия редактора, выборочная пересборка, перезапуск и журнал ошибок |
 | `scripts/pea_api.py` | Последовательные запросы через iframe; проверка источника сообщений и ожидание done |
 | `scripts/psd_guides.py` | Направляющие в image resource 1032 без растрирования текстовых слоёв |
 | `scripts/serve_bridge.py`, `assets/photopea-bridge.html` | Локальный интерфейс импорта SVG и записи PSD/PNG через разрешённый браузер |
@@ -31,6 +32,10 @@
 Оригинальный проект использовал Pillow, psd-tools, Playwright и установленный Chrome. Определи доступный Python и пакеты, сначала проверь имеющийся runtime. Не устанавливай всё повторно. Если нужна зависимость, используй изолированную среду и кеш на D:. Не меняй глобальный Python и браузерную конфигурацию для этого навыка.
 
 Самостоятельный Playwright используй только когда текущие инструкции это позволяют. Если UI должен управляться исключительно специальным browser/computer-use инструментом, запускай локальный сервер, взаимодействуй с его кнопками и Photopea разрешённым инструментом. Скрипт из пакета не является разрешением обойти инструментальные ограничения.
+
+## Пробы перед масштабированием
+
+При неизвестном окружении или новой возможности делай небольшие отдельные пробы: handshake/echo → документ и текст → настоящий шрифт → многострочный текст/leading/tracking → группы → SVG-фигура и фото/маска → PSD/PNG → повторное открытие и направляющие. Сохраняй результат и ошибки в `_work/qa/`. В событиях 1361–1475 исходной сессии именно такие пробы определили рабочий маршрут. Не запускай длинный скрипт с несколькими непроверенными функциями: отсутствие `done` затруднит поиск причины. Возможности Photoshop Scripting DOM и Action Manager проверяй по нужной операции; сходство API не означает полной поддержки.
 
 ## Схема сцены
 
@@ -53,6 +58,7 @@ SVG содержит `<g>` для групп, `<text>` для текста, фи
 
 ```powershell
 python scripts/build_pea.py "project/_work/pages/out/01_home.html" "project/_work/out/mock/01_home.psd" --width 1440 --grid --container 1170 --columns 12 --gutter 30 --fonts "project/_work/fonts.json"
+python scripts/build_batch.py "project/_work/build-jobs.json" --only home-mock home-proto
 python scripts/scene_to_svg.py "project/_work/01_home.scene.json" "project/_work/01_home.svg"
 python scripts/prepare_capture.py "project/_work/pages/out/01_home.html" "project/_work/pages/out/01_home.capture.html" --width 1440 --fonts "project/_work/fonts.json"
 python scripts/serve_bridge.py --root "project/_work" --output "project/_work/out/mock" --port 8765
@@ -62,6 +68,20 @@ python scripts/compare_renders.py "project/_work/out/mock/01_home_browser.png" "
 ```
 
 Runner сохраняет PNG из браузера и Photopea. `--pre` задаёт путь доверенного JS-преобразования собственной страницы; `--arg` — JSON-файл с его аргументами. Это позволяет строить нейтральный прототип из той же геометрии. Напиши такой преобразователь под CSS текущего проекта, включая заглушки и аннотации; музейный набор селекторов не универсален.
+
+### Пакетная сборка
+
+Пути в `build-jobs.json` задаются относительно его папки. `pre_arg` — JSON-значение, `pre_js` — файл JS-функции. Для скетчей один HTML может запускать функцию отрисовки с разными ключами страниц. Пример:
+
+```json
+{"jobs": [
+  {"id": "home-mock", "html": "pages/out/01_home.html", "psd": "out/mock/01_home.psd", "width": 1440, "fonts": "fonts.json", "grid": {"container": 1170, "columns": 12, "gutter": 30}},
+  {"id": "home-proto", "html": "pages/out/01_home.html", "psd": "out/proto/01_home.psd", "width": 1440, "pre_js": "wire.js", "pre_arg": [{"sel": ".hero", "text": "Основное действие"}]},
+  {"id": "home-sketch", "html": "sketch/sheet.html", "psd": "out/sketch/home.psd", "width": 2400, "pre_js": "draw-sheet.js", "pre_arg": "home", "fonts": "fonts.json"}
+]}
+```
+
+Runner переиспользует редактор, закрывает документ после каждого листа и перезапускает браузер после серии (по умолчанию 8 листов, параметр `--restart-every`). После ошибки следующий лист получает новый экземпляр. Журнал `.build-results.json` различает `built` и `failed`; ненулевой exit code сообщает неполный комплект. `built` означает получение файлов, не успешное визуальное QA. Выбор `--only` удобен для исправлений; после изменения общего CSS пересобери все зависимые листы. Параллельные процессы допустимы при независимых заданиях, экземплярах и выходных путях.
 
 Конвертер без браузера создаёт `.svg`, `.post.js`, `.layers.json`. Локальный мост открывается по `http://127.0.0.1:8765/__photopea_bridge`. Укажи относительный путь SVG и нажми импорт: байты передаются iframe Photopea, post-script сохраняет PSD, сервер пишет результат в выбранную папку. Затем сохраняй PNG и проверяй слои/вид. Мост не требует доступа к DOM редактора через сторонний скрипт автоматизации. Можно импортировать и проверять SVG вручную через сам редактор и File → Script.
 

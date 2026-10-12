@@ -148,8 +148,9 @@ var d=app.activeDocument; walk(d.layers); d.saveToOE('psd');""")
         if out_png:
             res = self.pea_run("app.activeDocument.saveToOE('png');", timeout=300)
             pngs = [r for r in res if isinstance(r, bytes)]
-            if pngs:
-                Path(out_png).write_bytes(pngs[-1])
+            if not pngs:
+                raise RuntimeError('Photopea did not return PNG output')
+            Path(out_png).write_bytes(pngs[-1])
         self.pea_run("app.activeDocument.close(SaveOptions.DONOTSAVECHANGES);", timeout=120)
         kinds = {}
         for it in sc["items"]:
